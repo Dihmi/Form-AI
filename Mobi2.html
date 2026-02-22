@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MobilityAI — Pose Analyzer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Unbounded:wght@300;600;900&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js" crossorigin="anonymous"></script>
+<style>
+:root {
+  --bg:#0a0a0f; --surface:#13131c; --border:#1e1e2e;
+  --accent:#00ffc2; --accent2:#ff4f8b; --accent3:#7b5ea7;
+  --manual:#f0a500; --text:#e8e8f0; --muted:#555570; --grid:#1a1a28;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:'Space Mono',monospace;min-height:100vh;overflow-x:hidden}
+body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);background-size:40px 40px;pointer-events:none;z-index:0}
+body::after{content:'';position:fixed;top:-200px;left:50%;transform:translateX(-50%);width:600px;height:600px;background:radial-gradient(circle,rgba(0,255,194,0.06) 0%,transparent 70%);pointer-events:none;z-index:0}
+.container{position:relative;z-index:1;max-width:1160px;margin:0 auto;padding:0 24px}
+header{padding:28px 0 18px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--border)}
+.logo-mark{width:38px;height:38px;border:2px solid var(--accent);border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.logo-mark svg{width:18px;height:18px}
+h1{font-family:'Unbounded',sans-serif;font-weight:900;font-size:clamp(16px,2.5vw,22px);letter-spacing:-0.02em}
+h1 span{color:var(--accent)}
+.badge{margin-left:auto;font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--accent);border:1px solid var(--accent);padding:4px 10px;border-radius:2px;opacity:.6}
+main{padding:24px 0 40px;display:grid;grid-template-columns:1fr 360px;gap:20px;align-items:start}
+@media(max-width:768px){main{grid-template-columns:1fr}}
+
+/* Canvas */
+.canvas-panel{background:var(--surface);border:1px solid var(--border);border-radius:6px;overflow:hidden;position:relative;min-height:420px;display:flex;align-items:center;justify-content:center;transition:border-color .2s}
+.canvas-panel.placing-mode{border-color:var(--manual)}
+.drop-zone{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;cursor:pointer;transition:background .2s;z-index:2}
+.drop-zone.hidden{display:none}
+.drop-zone:hover{background:rgba(0,255,194,.03)}
+.drop-zone.drag-over{background:rgba(0,255,194,.07);outline:2px dashed var(--accent)}
+.drop-icon{width:60px;height:60px;border:2px dashed var(--muted);border-radius:50%;display:flex;align-items:center;justify-content:center;transition:border-color .2s}
+.drop-zone:hover .drop-icon{border-color:var(--accent)}
+.drop-icon svg{width:26px;height:26px;opacity:.5}
+.drop-zone p{font-size:11px;color:var(--muted);text-align:center;line-height:1.9}
+.drop-zone strong{color:var(--accent);font-weight:400}
+#file-input{display:none}
+#output-canvas{max-width:100%;max-height:620px;display:block;z-index:1}
+#source-image{display:none}
+.loading-overlay{position:absolute;inset:0;background:rgba(10,10,15,.88);display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:10}
+.loading-overlay.active{display:flex}
+.spinner{width:36px;height:36px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-overlay p{font-size:10px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+#edit-banner{display:none;position:absolute;top:10px;left:50%;transform:translateX(-50%);background:rgba(240,165,0,.15);border:1px solid var(--manual);border-radius:3px;padding:6px 14px;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--manual);z-index:6;white-space:nowrap;pointer-events:none}
+.status-bar{font-size:10px;letter-spacing:.08em;color:var(--muted);text-transform:uppercase;padding:8px 0 0;text-align:center}
+.status-bar .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.status-bar.ready .dot{background:var(--accent);animation:pulse 2s infinite}
+.status-bar.editing .dot{background:var(--manual);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* Loupe */
+#loupe{position:fixed;display:none;pointer-events:none;z-index:1000;border-radius:50%;border:2px solid var(--manual);box-shadow:0 0 0 1px rgba(240,165,0,.3),0 8px 32px rgba(0,0,0,.6);overflow:hidden}
+#loupe canvas{display:block}
+#loupe-cross{position:absolute;inset:0;pointer-events:none}
+#loupe-cross::before,#loupe-cross::after{content:'';position:absolute;background:rgba(240,165,0,.85)}
+#loupe-cross::before{width:1px;left:50%;top:0;bottom:0}
+#loupe-cross::after{height:1px;top:50%;left:0;right:0}
+
+/* Panel */
+.side-panel{display:flex;flex-direction:column;gap:12px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:16px}
+.card-title{font-family:'Unbounded',sans-serif;font-size:9px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--accent);margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.btn{width:100%;padding:10px 12px;background:transparent;border:1px solid var(--accent);color:var(--accent);font-family:'Space Mono',monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:all .18s;border-radius:3px}
+.btn:hover{background:var(--accent);color:var(--bg)}
+.btn-ghost{border-color:var(--border);color:var(--muted)}
+.btn-ghost:hover{background:var(--border);color:var(--text)}
+.preset-chip{padding:5px 10px;border:1px solid var(--border);border-radius:20px;font-size:10px;color:var(--muted);cursor:pointer;transition:all .15s;background:transparent;font-family:'Space Mono',monospace;white-space:nowrap}
+.preset-chip:hover{border-color:var(--accent);color:var(--accent)}
+.preset-chip.active{border-color:var(--accent);color:var(--accent);background:rgba(0,255,194,.08)}
+.refline-btn{padding:3px 9px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--muted);font-family:'Space Mono',monospace;font-size:9px;cursor:pointer;transition:all .15s}
+.refline-btn:hover{border-color:var(--accent3);color:var(--accent3)}
+.refline-btn.active{border-color:var(--accent3);color:var(--accent3);background:rgba(123,94,167,.12)}
+
+/* Node list */
+.node-list{display:flex;flex-direction:column;gap:2px}
+.node-row{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:4px;border:1px solid transparent;transition:background .15s}
+.node-row:hover{background:rgba(255,255,255,.025);border-color:var(--border)}
+.node-row.active{background:rgba(0,255,194,.05);border-color:rgba(0,255,194,.15)}
+.node-toggle{flex-shrink:0;width:14px;height:14px;border:1px solid var(--border);border-radius:3px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;background:transparent}
+.node-toggle:hover{border-color:var(--accent)}
+.node-row.active .node-toggle{background:rgba(0,255,194,.15);border-color:var(--accent)}
+.node-toggle-check{width:6px;height:6px;border-radius:1px;background:var(--accent);opacity:0;transition:opacity .15s}
+.node-row.active .node-toggle-check{opacity:1}
+.node-label{font-size:10px;color:var(--muted);flex:1;cursor:pointer;transition:color .15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.node-row.active .node-label{color:var(--text)}
+.node-merged-tag{font-size:8px;letter-spacing:.06em;color:var(--accent3);border:1px solid rgba(123,94,167,.4);border-radius:2px;padding:1px 5px;flex-shrink:0;opacity:.8;white-space:nowrap}
+.node-conf{font-size:9px;min-width:26px;text-align:right;flex-shrink:0}
+.node-angle{font-size:9px;font-weight:700;min-width:34px;text-align:right;flex-shrink:0}
+.node-comp-btn{flex-shrink:0;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--muted);font-family:'Space Mono',monospace;font-size:9px;cursor:pointer;transition:all .15s;line-height:1.4;title:'Toggle complementary angle'}
+.node-comp-btn:hover{border-color:var(--accent3);color:var(--accent3)}
+.node-comp-btn.active{border-color:var(--accent3);color:var(--accent3);background:rgba(123,94,167,.15)}
+.node-place-btn{flex-shrink:0;padding:1px 5px;border:1px solid var(--border);border-radius:3px;background:transparent;color:var(--muted);font-family:'Space Mono',monospace;font-size:9px;cursor:pointer;transition:all .15s;line-height:1.4}
+.node-place-btn:hover{border-color:var(--manual);color:var(--manual)}
+.node-place-btn.placing{border-color:var(--manual);color:var(--manual);background:rgba(240,165,0,.12);animation:pulse 1s infinite}
+.node-place-btn.placed{border-color:var(--accent3);color:var(--accent3)}
+.node-eye-btn{flex-shrink:0;padding:1px 5px;border:1px solid transparent;border-radius:3px;background:transparent;color:var(--muted);font-size:10px;cursor:pointer;transition:all .15s;line-height:1.4;opacity:.35}
+.node-eye-btn:hover{opacity:1;color:var(--text)}
+.node-eye-btn.visible{opacity:1;color:var(--accent);border-color:rgba(0,255,194,.3)}
+.calib-input{width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;color:var(--text);font-family:"Space Mono",monospace;font-size:11px;padding:7px 10px;outline:none;transition:border-color .15s;-moz-appearance:textfield}
+.calib-input::-webkit-outer-spin-button,.calib-input::-webkit-inner-spin-button{-webkit-appearance:none}
+.calib-input:focus{border-color:var(--accent)}
+.calib-row{display:flex;align-items:center;gap:8px;margin-top:10px}
+.calib-label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+
+/* Metrics */
+.metric-block{padding:11px 0;border-bottom:1px solid var(--border)}
+.metric-block:last-child{border-bottom:none;padding-bottom:0}
+.metric-name{font-size:10px;color:var(--muted);margin-bottom:5px;display:flex;justify-content:space-between;align-items:center}
+.metric-status{font-size:9px;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
+.metric-value{font-size:26px;font-family:'Unbounded',sans-serif;font-weight:900;letter-spacing:-.02em;line-height:1}
+.metric-value.good{color:var(--accent)}
+.metric-value.warn{color:#ffd700}
+.metric-value.bad{color:var(--accent2)}
+.metric-target{font-size:9px;letter-spacing:.08em;text-transform:uppercase;opacity:.45;margin-top:3px}
+.metric-bar-track{height:2px;background:var(--border);border-radius:2px;margin-top:8px;overflow:hidden}
+.metric-bar-fill{height:100%;border-radius:2px;transition:width .5s ease}
+.metric-desc{font-size:9px;color:var(--muted);margin-top:5px;line-height:1.6}
+
+/* Insights */
+.insight-item{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--border)}
+.insight-item:last-child{border-bottom:none;padding-bottom:0}
+.insight-dot{width:5px;height:5px;border-radius:50%;margin-top:5px;flex-shrink:0}
+.dot-green{background:var(--accent)}.dot-yellow{background:#ffd700}.dot-red{background:var(--accent2)}
+.insight-text{font-size:10px;line-height:1.7;color:var(--muted)}
+.insight-text strong{color:var(--text)}
+.node-group-header{display:flex;align-items:center;gap:6px;padding:4px 2px;cursor:pointer;user-select:none;margin-top:10px}
+.node-group-header:first-child{margin-top:0}
+.node-group-chevron{font-size:8px;color:var(--muted);transition:transform .2s;flex-shrink:0}
+.node-group-header.collapsed .node-group-chevron{transform:rotate(-90deg)}
+.node-group-title{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-family:'Unbounded',sans-serif;font-weight:600}
+.node-group-body{overflow:hidden;transition:max-height .25s ease}
+.node-group-body.collapsed{max-height:0 !important}
+.node-joint-label{font-size:9px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:6px 2px 3px;margin-top:4px}
+.empty-state{font-size:10px;color:var(--muted);text-align:center;padding:16px 0;font-style:italic}
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <div class="logo-mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#00ffc2" stroke-width="2">
+        <circle cx="12" cy="5" r="2"/><path d="M12 7v6M9 10l3 3 3-3M8 16l4 4 4-4"/>
+        <circle cx="8" cy="16" r="1.5" fill="#00ffc2" stroke="none"/><circle cx="16" cy="16" r="1.5" fill="#00ffc2" stroke="none"/>
+      </svg>
+    </div>
+    <div><h1>Mobility<span>AI</span></h1></div>
+    <div class="badge">Pose Engine v2</div>
+  </header>
+  <main>
+    <div>
+      <div class="canvas-panel" id="canvas-panel">
+        <div id="edit-banner">✎ DRAG TO PLACE: <span id="edit-banner-joint">—</span></div>
+        <div class="drop-zone" id="drop-zone">
+          <div class="drop-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/>
+              <polyline points="17,8 12,3 7,8"/><line x1="12" y1="3" x2="12" y2="15"/>
+            </svg>
+          </div>
+          <p><strong>Drop an image here</strong><br>or click to browse<br><span style="font-size:10px">JPG · PNG · WEBP</span></p>
+        </div>
+        <div class="loading-overlay" id="loading"><div class="spinner"></div><p id="loading-text">Initializing…</p></div>
+        <img id="source-image" alt=""/>
+        <canvas id="output-canvas"></canvas>
+      </div>
+      <input type="file" id="file-input" accept="image/*">
+      <div class="status-bar" id="status-bar"><span class="dot"></span>awaiting image</div>
+    </div>
+    <div class="side-panel">
+      <div class="card">
+        <div class="card-title">Setup</div>
+        <div style="display:flex;gap:8px;margin-bottom:16px">
+          <button class="btn" id="upload-btn" style="flex:1">↑ Upload</button>
+          <button class="btn btn-ghost" id="clear-btn" style="flex:1">Clear</button>
+        </div>
+        <div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Pose</div>
+        <div id="pose-chips" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px"></div>
+        <div id="pose-meta" style="display:none;margin-bottom:12px;padding:10px;background:rgba(0,255,194,.04);border:1px solid rgba(0,255,194,.12);border-radius:4px">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+            <div id="pose-view-badge" style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;padding:2px 7px;border-radius:2px;border:1px solid var(--accent3);color:var(--accent3)">side</div>
+          </div>
+          <div id="pose-description" style="font-size:10px;color:var(--muted);line-height:1.6"></div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+          <div style="font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted)">Nodes</div>
+          <div style="display:flex;gap:5px">
+            <button class="refline-btn" id="refline-h-btn">— H</button>
+            <button class="refline-btn" id="refline-v-btn">| V</button>
+          </div>
+        </div>
+        <div class="node-list" id="node-list"></div>
+      </div>
+      <div class="card" id="calib-card">
+        <div class="card-title">Calibration</div>
+        <div style="font-size:10px;color:var(--muted);line-height:1.6">Enter a known body measurement to enable distance metrics.</div>
+        <div class="calib-row">
+          <label class="calib-label" for="calib-height-input">Height</label>
+          <input class="calib-input" id="calib-height-input" type="number" min="50" max="250" placeholder="e.g. 175" step="1"/>
+          <span style="font-size:9px;color:var(--muted);white-space:nowrap">cm</span>
+        </div>
+      </div>
+      <div class="card" id="metrics-card" style="display:none">
+        <div class="card-title" id="metrics-title">Metrics</div>
+        <div id="metrics-section"></div>
+      </div>
+      <div class="card" id="free-angles-card" style="display:none">
+        <div class="card-title">Angles</div>
+        <div id="angles-section"></div>
+      </div>
+      <div class="card" id="insights-card" style="display:none">
+        <div class="card-title">Insights</div>
+        <div id="insights-section"></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Loupe -->
+<div id="loupe" style="width:180px;height:180px">
+  <canvas id="loupe-canvas" width="180" height="180"></canvas>
+  <div id="loupe-cross"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// POSE LIBRARY
+// ═══════════════════════════════════════════════════════════════════════════
+// mergedNodes: pairs of landmark names (from the LM map) that should be treated as one.
+//   e.g. ['L Shoulder', 'R Shoulder'] — use names, never raw indices.
+//
+// metrics[].side:
+//   'best' — pick whichever of L/R is closer to target
+//   'avg'  — average of L and R
+//   'diff' — absolute difference (for symmetry checks)
+//   'L'/'R' — specific side only
+
+const POSE_LIBRARY = {
+  downdog: {
+    label: 'Down Dog',
+    view: 'side',
+    description: 'Side view — hips high, spine long, heels toward floor.',
+    joints: ['hip', 'shoulder', 'knee', 'ankle', 'elbow'],
+    mergedNodes: [
+      ['L Shoulder', 'R Shoulder'],
+      ['L Elbow',    'R Elbow'],
+      ['L Hip',      'R Hip'],
+      ['L Knee',     'R Knee'],
+      ['L Ankle',    'R Ankle'],
+    ],
+    refLines: { h: null, v: null },
+    metrics: [
+      {
+        name: 'Hip Angle',
+        joint: 'hip', side: 'best',
+        target: { op: '<', value: 90 },
+        desc: 'Hips high — aim below 90° for full expression',
+      },
+      {
+        name: 'Shoulder Angle',
+        joint: 'shoulder', side: 'best',
+        target: { op: '>', value: 160 },
+        desc: 'Arms and torso form a straight line',
+      },
+      {
+        name: 'Knee Angle',
+        joint: 'knee', side: 'best',
+        target: { op: '>', value: 160 },
+        desc: 'Straight legs — bend if hamstrings are tight',
+      },
+    ],
+  },
+
+
+
+  lunge: {
+    label: 'Lunge',
+    view: 'side',
+    description: 'Side view — front knee at 90°, hip open, rear knee hovering.',
+    joints: ['hip', 'knee', 'ankle', 'lunge_split'],
+    mergedNodes: [
+      ['L Shoulder', 'R Shoulder'],
+      ['L Elbow',    'R Elbow'],
+      ['L Hip',      'R Hip'],
+    ],
+    refLines: { h: null, v: 0.5 },
+    metrics: [
+      {
+        name: 'Front Knee',
+        joint: 'knee', side: 'best',
+        target: { op: '~', value: 90, tolerance: 15 },
+        desc: 'Front knee should be close to 90°',
+      },
+      {
+        name: 'Hip Angle',
+        joint: 'hip', side: 'best',
+        target: { op: '~', value: 120, tolerance: 20 },
+        desc: 'Hip angle reflects stride length',
+      },
+      {
+        name: 'Lunge Split',
+        joint: 'lunge_split', side: 'best',
+        target: { op: '~', value: 140, tolerance: 20 },
+        desc: 'Angle front-knee → hip → rear-knee — reflects how open the split is',
+      },
+    ],
+  },
+
+
+
+  middlesplit: {
+    label: 'Middle Split',
+    view: 'front',
+    description: 'Front view — legs spread wide to each side, hips square.',
+    joints: ['hip', 'knee', 'ankle', 'middle_split'],
+    mergedNodes: [],
+    refLines: { h: 0.5, v: null },
+    metrics: [
+      {
+        name: 'Split Angle',
+        joint: 'middle_split', side: 'L',
+        target: { op: '>', value: 140 },
+        desc: 'R Knee → C Hip → L Knee — 180° is a full flat split',
+      },
+      {
+        name: 'Knee Symmetry',
+        joint: 'knee', side: 'diff',
+        target: { op: '<', value: 15 },
+        desc: 'L/R knee angle difference — lower means more symmetric',
+      },
+      {
+        name: 'Hip Symmetry',
+        joint: 'hip', side: 'diff',
+        target: { op: '<', value: 15 },
+        desc: 'L/R hip angle difference — hips should be square',
+      },
+    ],
+  },
+
+  backbridge: {
+    label: 'Back Bridge',
+    view: 'side',
+    description: 'Side view — full wheel/bridge, hips high, arms and legs extended.',
+    joints: ['shoulder', 'elbow', 'hip', 'knee'],
+    mergedNodes: [
+      ['L Shoulder', 'R Shoulder'],
+      ['L Elbow',    'R Elbow'],
+      ['L Hip',      'R Hip'],
+      ['L Knee',     'R Knee'],
+    ],
+    refLines: { h: null, v: null },
+    metrics: [
+      {
+        name: 'Hip Extension',
+        joint: 'hip', side: 'best',
+        target: { op: '>', value: 160 },
+        desc: 'Hips fully pushed up — aim for as open as possible',
+      },
+      {
+        name: 'Shoulder Angle',
+        joint: 'shoulder', side: 'best',
+        target: { op: '<', value: 90 },
+        desc: 'Shoulders stacked over wrists, arms pressing into floor',
+      },
+      {
+        name: 'Knee Angle',
+        joint: 'knee', side: 'best',
+        target: { op: '>', value: 140 },
+        desc: 'Legs extended — straighter legs indicate more flexibility',
+      },
+      {
+        // Distance metric: wrist-to-ankle / total height
+        // Smaller ratio = more open bridge (wrists closer to ankles relative to body size)
+        // Elite bridge: ~0.3–0.4, good: ~0.5, stiff: >0.65
+        name: 'Bridge Reach',
+        type: 'distance',
+        from: 'L Wrist',
+        to:   'L Ankle',
+        unit: 'ratio',   // divided by calibrationHeight via px-per-cm estimation
+        target: { op: '<', value: 0.5 },
+        desc: 'Wrist-to-ankle distance ÷ total height — lower means a more open bridge',
+      },
+    ],
+  },
+
+  forwardfold: {
+    label: 'Fwd Fold',
+    view: 'side',
+    description: 'Side view — deep hip flexion, spine long.',
+    joints: ['hip', 'knee', 'ankle'],
+    mergedNodes: [
+      ['L Hip',   'R Hip'],
+      ['L Knee',  'R Knee'],
+      ['L Ankle', 'R Ankle'],
+    ],
+    refLines: { h: null, v: null },
+    metrics: [
+      {
+        name: 'Hip Angle',
+        joint: 'hip', side: 'best',
+        target: { op: '<', value: 60 },
+        desc: 'Deeper fold = smaller angle',
+      },
+    ],
+  },
+
+  overhead: {
+    label: 'Overhead',
+    view: 'front',
+    description: 'Front view — arms fully overhead, shoulders stable.',
+    joints: ['shoulder', 'elbow'],
+    mergedNodes: [],
+    refLines: { h: null, v: null },
+    metrics: [
+      {
+        name: 'Shoulder Angle',
+        joint: 'shoulder', side: 'avg',
+        target: { op: '>', value: 150 },
+        desc: 'Arms fully overhead',
+      },
+      {
+        name: 'Shoulder Symmetry',
+        joint: 'shoulder', side: 'diff',
+        target: { op: '<', value: 15 },
+        desc: 'Left/right difference',
+      },
+    ],
+  },
+};
+
+// ─── Landmark definitions ──────────────────────────────────────────────────
+const LM = {
+  11:'L Shoulder', 12:'R Shoulder',
+  13:'L Elbow',    14:'R Elbow',
+  15:'L Wrist',    16:'R Wrist',
+  19:'L Index',    20:'R Index',
+  23:'L Hip',      24:'R Hip',
+  25:'L Knee',     26:'R Knee',
+  27:'L Ankle',    28:'R Ankle',
+  29:'L Heel',     30:'R Heel',
+  31:'L Foot Tip', 32:'R Foot Tip',
+  // Virtual landmarks (computed, not from MediaPipe)
+  33:'C Hip',   // midpoint of L Hip (23) and R Hip (24)
+};
+
+// Reverse map: name → index (for human-readable mergedNodes in POSE_LIBRARY)
+const LM_IDX = Object.fromEntries(Object.entries(LM).map(([k,v])=>[v,+k]));
+
+// Joint defs: [A, vertex_B, C] — angle at B
+const JOINT_DEFS = [
+  { id:'shoulder',    pairs:[{name:'L Shoulder',    idxs:[13,11,23]},{name:'R Shoulder',    idxs:[14,12,24]}] },
+  { id:'elbow',       pairs:[{name:'L Elbow',       idxs:[11,13,15]},{name:'R Elbow',       idxs:[12,14,16]}] },
+  { id:'wrist',       pairs:[{name:'L Wrist',       idxs:[13,15,19]},{name:'R Wrist',       idxs:[14,16,20]}] },
+  { id:'hip',         pairs:[{name:'L Hip',         idxs:[11,23,25]},{name:'R Hip',         idxs:[12,24,26]}] },
+  { id:'knee',        pairs:[{name:'L Knee',        idxs:[23,25,27]},{name:'R Knee',        idxs:[24,26,28]}] },
+  { id:'ankle',       pairs:[{name:'L Ankle',       idxs:[25,27,31]},{name:'R Ankle',       idxs:[26,28,32]}] },
+  // Cross-body split: front-knee → hip → rear-knee (both orientations for L/R forward leg)
+  { id:'lunge_split',  pairs:[{name:'L Lunge Split',  idxs:[25,23,26]},{name:'R Lunge Split',  idxs:[26,24,25]}] },
+  // Middle split: R Knee → C Hip (virtual midpoint of L+R hip) → L Knee — single symmetric angle
+  { id:'middle_split', pairs:[{name:'Middle Split',    idxs:[26,33,25]}] },
+];
+
+const JOINT_CONNECTIONS = {
+  shoulder:    [[11,12],[11,13],[12,14]],
+  elbow:       [[11,13],[13,15],[12,14],[14,16]],
+  wrist:       [[13,15],[15,19],[14,16],[16,20]],
+  hip:         [[11,23],[12,24],[23,24]],
+  knee:        [[23,25],[24,26]],
+  ankle:       [[25,27],[26,28],[27,29],[27,31],[28,30],[28,32]],
+  lunge_split:  [[25,23],[23,26],[26,24],[24,25]],  // both L and R hip variants
+  middle_split: [[25,33],[33,26]],                   // R Knee – C Hip – L Knee
+};
+
+// All landmark indices that appear across all joint defs
+const ALL_JOINT_LM = new Set();
+for (const jd of JOINT_DEFS) for (const p of jd.pairs) for (const i of p.idxs) ALL_JOINT_LM.add(i);
+
+// Vertex map
+const LM_VERTEX_JOINT = (() => {
+  const map = {};
+  for (const jd of JOINT_DEFS) for (const p of jd.pairs) map[p.idxs[1]] = jd.id;
+  return map;
+})();
+function getJointIdForLm(idx) { return LM_VERTEX_JOINT[idx] || null; }
+
+// ─── State ─────────────────────────────────────────────────────────────────
+let poseModel = null, modelReady = false;
+let lastPoseLandmarks = null;
+let activeJoints = new Set(Object.keys(JOINT_CONNECTIONS));
+let manualLandmarks = {};   // idx → {x,y} normalized
+let placingIdx = null;
+let currentPoseKey = null;
+// Joints where user toggled "complementary" (display 180-angle)
+let complementaryJoints = new Set();
+// Joints whose angle overlay is shown on the canvas (eye icon)
+// null = not yet initialised for current pose (will be set by activatePose)
+let visibleJoints = new Set();
+// Calibration reference height in cm (user-entered)
+let calibrationHeight = null;
+
+let mergeMap = {};          // idx → canonical idx (the lower of the merged pair)
+
+let refLines = { h: null, v: null };
+let draggingRef = null;
+
+// ─── DOM refs ──────────────────────────────────────────────────────────────
+const dropZone        = document.getElementById('drop-zone');
+const fileInput       = document.getElementById('file-input');
+const uploadBtn       = document.getElementById('upload-btn');
+const clearBtn        = document.getElementById('clear-btn');
+const canvas          = document.getElementById('output-canvas');
+const ctx             = canvas.getContext('2d');
+const sourceImg       = document.getElementById('source-image');
+const loadingEl       = document.getElementById('loading');
+const loadingText     = document.getElementById('loading-text');
+const statusBar       = document.getElementById('status-bar');
+const insightsSection = document.getElementById('insights-section');
+const metricsCard     = document.getElementById('metrics-card');
+const metricsSection  = document.getElementById('metrics-section');
+const metricsTitle    = document.getElementById('metrics-title');
+const canvasPanel     = document.getElementById('canvas-panel');
+const editBanner      = document.getElementById('edit-banner');
+const editBannerJoint = document.getElementById('edit-banner-joint');
+const nodeListEl      = document.getElementById('node-list');
+const poseChipsEl     = document.getElementById('pose-chips');
+const poseMetaEl      = document.getElementById('pose-meta');
+const poseViewBadge   = document.getElementById('pose-view-badge');
+const poseSideBadge   = null; // element removed; kept for compat
+const calibHeightInput = document.getElementById('calib-height-input');
+calibHeightInput.addEventListener('input', () => {
+  const v = parseFloat(calibHeightInput.value);
+  calibrationHeight = (isFinite(v) && v > 0) ? v : null;
+  if (lastPoseLandmarks) fullReRender();
+});
+const poseDescription = document.getElementById('pose-description');
+const refHBtn         = document.getElementById('refline-h-btn');
+const refVBtn         = document.getElementById('refline-v-btn');
+const loupeEl         = document.getElementById('loupe');
+const loupeCanvas     = document.getElementById('loupe-canvas');
+const loupeCtx        = loupeCanvas.getContext('2d');
+
+// ─── Build pose chips ──────────────────────────────────────────────────────
+function buildPoseChips() {
+  poseChipsEl.innerHTML = '';
+  const freeChip = document.createElement('button');
+  freeChip.className = 'preset-chip active'; freeChip.textContent = 'Free'; freeChip.dataset.pose = '';
+  freeChip.addEventListener('click', () => activatePose(null));
+  poseChipsEl.appendChild(freeChip);
+  for (const [key, pose] of Object.entries(POSE_LIBRARY)) {
+    const chip = document.createElement('button');
+    chip.className = 'preset-chip'; chip.textContent = pose.label; chip.dataset.pose = key;
+    chip.addEventListener('click', () => activatePose(key));
+    poseChipsEl.appendChild(chip);
+  }
+}
+
+// ─── Resolve mergedNodes names → indices ───────────────────────────────────
+// mergedNodes use landmark names ('L Shoulder', 'R Shoulder' etc). This
+// converts them to the numeric indices the rest of the code uses.
+function resolveMergedNodes(mergedNodes) {
+  return mergedNodes.map(([a,b]) => [LM_IDX[a], LM_IDX[b]]);
+}
+
+function buildMergeMap(pose) {
+  mergeMap = {};
+  if (!pose) return;
+  for (const [a, b] of resolveMergedNodes(pose.mergedNodes)) {
+    const canon = Math.min(a, b);
+    mergeMap[a] = canon;
+    mergeMap[b] = canon;
+  }
+}
+
+// Returns the canonical index for a landmark (itself if not merged)
+function canonical(idx) { return mergeMap[idx] ?? idx; }
+
+// For a merged pair, returns both indices; otherwise just [idx]
+function mergedPair(idx) {
+  const nodes = currentPoseKey ? resolveMergedNodes(POSE_LIBRARY[currentPoseKey].mergedNodes) : [];
+  for (const [a,b] of nodes) {
+    if (a===idx||b===idx) return [a,b];
+  }
+  return [idx];
+}
+
+// ─── Activate pose ─────────────────────────────────────────────────────────
+function activatePose(key) {
+  currentPoseKey = key;
+  poseChipsEl.querySelectorAll('.preset-chip').forEach(c =>
+    c.classList.toggle('active', c.dataset.pose === (key||''))
+  );
+
+  const pose = key ? POSE_LIBRARY[key] : null;
+  buildMergeMap(pose);
+
+  if (!pose) {
+    activeJoints = new Set(Object.keys(JOINT_CONNECTIONS));
+    refLines = {h:null,v:null};
+    refHBtn.classList.remove('active'); refVBtn.classList.remove('active');
+    poseMetaEl.style.display='none'; metricsCard.style.display='none';
+    visibleJoints = new Set(Object.keys(JOINT_CONNECTIONS)); // show all in free mode
+    buildNodeList(); updateActiveRowStyles();
+    if (lastPoseLandmarks) fullReRender();
+    return;
+  }
+
+  activeJoints = new Set(pose.joints);
+  refLines = { h: pose.refLines.h, v: pose.refLines.v };
+  refHBtn.classList.toggle('active', refLines.h!==null);
+  refVBtn.classList.toggle('active', refLines.v!==null);
+  poseViewBadge.textContent = pose.view;
+  poseDescription.textContent = pose.description;
+  poseMetaEl.style.display='';
+
+  // Default visible joints = only those referenced in this pose's metrics
+  visibleJoints = new Set(pose.metrics.map(m => m.joint));
+  buildNodeList();
+  updateActiveRowStyles();
+  if (lastPoseLandmarks) fullReRender();
+}
+
+// ─── Build node list ────────────────────────────────────────────────────────
+// In pose mode: only show nodes relevant to activeJoints, collapse others.
+// Merged pairs show as a single combined row.
+function buildNodeList() {
+  nodeListEl.innerHTML='';
+  const pose = currentPoseKey ? POSE_LIBRARY[currentPoseKey] : null;
+
+  // Determine which lm indices to show
+  // In pose mode: only indices that appear in active joint defs
+  const activeLmIdxs = new Set();
+  for (const jd of JOINT_DEFS) {
+    if (!activeJoints.has(jd.id)) continue;
+    for (const p of jd.pairs) for (const i of p.idxs) activeLmIdxs.add(i);
+  }
+
+  // In pose mode: one row per joint. Merged joints → single row with L·R tag.
+  // Non-merged joints → two rows (L and R).
+  if (pose) {
+    const resolvedMerges = resolveMergedNodes(pose.mergedNodes);
+
+    for (const jd of JOINT_DEFS) {
+      if (!activeJoints.has(jd.id)) continue;
+
+      // A joint is "merged" if both of its vertex landmarks are in a mergedNodes pair together
+      const lVtx = jd.pairs[0].idxs[1];
+      const rVtx = jd.pairs[1].idxs[1];
+      const isMerged = resolvedMerges.some(([a,b]) =>
+        (a === lVtx && b === rVtx) || (a === rVtx && b === lVtx)
+      );
+
+      if (isMerged) {
+        // For a merged joint, placement sets only the two vertex landmarks (L and R vertex)
+        // NOT the full triplets — endpoints (A and C) belong to adjacent joints
+        const allIdxsForJoint = [lVtx, rVtx];
+        const labelText = jd.id.charAt(0).toUpperCase() + jd.id.slice(1);
+        addNodeRow(nodeListEl, lVtx, labelText, jd.id, true, allIdxsForJoint);
+      } else {
+        // Two separate rows: L and R — each only sets its own vertex
+        for (const p of jd.pairs) {
+          const vtxIdx = p.idxs[1];
+          addNodeRow(nodeListEl, vtxIdx, p.name, jd.id, false, [vtxIdx]);
+        }
+      }
+    }
+  } else {
+    // Free mode: two collapsible groups
+    const groups = [
+      { label:'Upper Body', idxs:[11,12,13,14,15,16,19,20] },
+      { label:'Lower Body', idxs:[23,24,25,26,27,28,29,30,31,32] },
+    ];
+    for (const g of groups) {
+      const header = document.createElement('div');
+      header.className = 'node-group-header';
+      header.innerHTML = `<span class="node-group-chevron">▾</span><span class="node-group-title">${g.label}</span>`;
+      nodeListEl.appendChild(header);
+      const body = document.createElement('div');
+      body.className = 'node-group-body';
+      body.style.maxHeight = (g.idxs.length*34)+'px';
+      header.addEventListener('click', () => {
+        const col = body.classList.toggle('collapsed');
+        header.classList.toggle('collapsed', col);
+        body.style.maxHeight = col ? '0' : (g.idxs.length*34)+'px';
+      });
+      for (const idx of g.idxs) {
+        if (!LM[idx]) continue;
+        addNodeRow(body, idx, LM[idx], getJointIdForLm(idx), false, [idx]);
+      }
+      nodeListEl.appendChild(body);
+    }
+  }
+}
+
+function addNodeRow(parent, idx, label, jointId, isMerged, allIdxs) {
+  const row = document.createElement('div');
+  row.className = 'node-row' + (jointId && activeJoints.has(jointId) ? ' active' : '');
+  row.dataset.lmIdx = idx;
+  if (jointId) row.dataset.jointId = jointId;
+
+  // Toggle checkbox
+  const toggle = document.createElement('div');
+  toggle.className = 'node-toggle';
+  toggle.innerHTML = '<div class="node-toggle-check"></div>';
+
+  // Label
+  const lbl = document.createElement('span');
+  lbl.className = 'node-label';
+  lbl.textContent = label;
+
+  // Conf + angle spans
+  const conf = document.createElement('span');
+  conf.className = 'node-conf'; conf.id = 'nc-'+idx;
+
+  const angleSpan = document.createElement('span');
+  angleSpan.className = 'node-angle'; angleSpan.id = 'na-'+idx;
+
+  // Complementary toggle button
+  const compBtn = document.createElement('button');
+  compBtn.className = 'node-comp-btn' + (jointId && complementaryJoints.has(jointId) ? ' active' : '');
+  compBtn.title = 'Toggle reflex angle (360°−θ)';
+  compBtn.textContent = '360°';
+  if (jointId) {
+    compBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (complementaryJoints.has(jointId)) complementaryJoints.delete(jointId);
+      else complementaryJoints.add(jointId);
+      // Update all comp buttons for this jointId
+      nodeListEl.querySelectorAll('.node-comp-btn').forEach(b => {
+        const r = b.closest('.node-row');
+        if (r && r.dataset.jointId === jointId)
+          b.classList.toggle('active', complementaryJoints.has(jointId));
+      });
+      if (lastPoseLandmarks) fullReRender();
+    });
+  }
+
+  // Place button
+  const placeBtn = document.createElement('button');
+  placeBtn.className = 'node-place-btn' + (allIdxs.some(i=>manualLandmarks[i])?' placed':'');
+  placeBtn.dataset.lmIdx = idx;
+  placeBtn.title = 'Drag on image to reposition';
+  placeBtn.textContent = '✎';
+  placeBtn.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); startPlacing(idx, allIdxs); });
+
+  // Toggle / label click
+  if (jointId) {
+    [toggle, lbl].forEach(el => el.addEventListener('click', e => {
+      e.stopPropagation();
+      if (activeJoints.has(jointId)) activeJoints.delete(jointId);
+      else activeJoints.add(jointId);
+      updateActiveRowStyles();
+      if (lastPoseLandmarks) fullReRender();
+    }));
+  }
+
+  // Eye button — toggles angle overlay visibility for this joint
+  const eyeBtn = document.createElement('button');
+  eyeBtn.className = 'node-eye-btn' + (jointId && visibleJoints.has(jointId) ? ' visible' : '');
+  eyeBtn.title = 'Show/hide angle on skeleton';
+  eyeBtn.textContent = '👁';
+  if (jointId) {
+    eyeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (visibleJoints.has(jointId)) visibleJoints.delete(jointId);
+      else visibleJoints.add(jointId);
+      // sync all eye buttons for same jointId
+      nodeListEl.querySelectorAll('.node-eye-btn').forEach(b => {
+        const r = b.closest('.node-row');
+        if (r && r.dataset.jointId === jointId)
+          b.classList.toggle('visible', visibleJoints.has(jointId));
+      });
+      if (lastPoseLandmarks) fullReRender();
+    });
+  }
+
+  row.appendChild(toggle);
+  row.appendChild(lbl);
+  if (isMerged) {
+    const tag = document.createElement('span');
+    tag.className = 'node-merged-tag';
+    tag.textContent = 'L · R';
+    row.appendChild(tag);
+  }
+  row.appendChild(conf);
+  row.appendChild(angleSpan);
+  row.appendChild(eyeBtn);
+  row.appendChild(compBtn);
+  row.appendChild(placeBtn);
+  parent.appendChild(row);
+}
+
+function updateActiveRowStyles() {
+  nodeListEl.querySelectorAll('.node-row').forEach(row => {
+    const jid = row.dataset.jointId || getJointIdForLm(+row.dataset.lmIdx);
+    row.classList.toggle('active', jid ? activeJoints.has(jid) : false);
+  });
+}
+
+// ─── Zoom Loupe placement ───────────────────────────────────────────────────
+const LOUPE_SIZE  = 160;   // px diameter of the loupe window
+const LOUPE_ZOOM  = 2.5;   // magnification factor
+const LOUPE_OFFSET = 90;   // px offset from cursor
+
+loupeCanvas.width  = LOUPE_SIZE;
+loupeCanvas.height = LOUPE_SIZE;
+
+let placingAllIdxs = [];   // all indices that should move together
+
+function startPlacing(idx, allIdxs) {
+  if (placingIdx !== null) cancelPlacing();
+  if (!canvas.width) return;
+  placingIdx = idx;
+  placingAllIdxs = allIdxs || [idx];
+  canvasPanel.classList.add('edit-mode');
+  editBanner.style.display = 'block';
+  const name = allIdxs.length > 1
+    ? LM[allIdxs[0]].replace(/^[LR] /,'')
+    : (LM[idx]||idx);
+  editBannerJoint.textContent = name;
+  setStatus('editing', `Drag on image to place ${name} — release to confirm`);
+  nodeListEl.querySelector(`.node-place-btn[data-lm-idx="${idx}"]`)?.classList.add('placing');
+  // Show loupe
+  loupeEl.style.display = 'block';
+}
+
+function cancelPlacing() {
+  if (placingIdx !== null)
+    nodeListEl.querySelector(`.node-place-btn[data-lm-idx="${placingIdx}"]`)?.classList.remove('placing');
+  placingIdx = null; placingAllIdxs = [];
+  canvasPanel.classList.remove('edit-mode');
+  editBanner.style.display='none';
+  loupeEl.style.display='none';
+  canvas.style.cursor='';
+  setStatus('ready', lastPoseLandmarks ? 'Pose detected' : 'Model ready · drop an image');
+}
+
+function updateLoupe(clientX, clientY) {
+  if (placingIdx === null || !canvas.width) return;
+  const rect = canvas.getBoundingClientRect();
+  const cx = (clientX - rect.left) * (canvas.width  / rect.width);
+  const cy = (clientY - rect.top)  * (canvas.height / rect.height);
+
+  // Draw zoomed crop centered on cursor
+  const halfW = (LOUPE_SIZE / LOUPE_ZOOM) / 2;
+  const halfH = (LOUPE_SIZE / LOUPE_ZOOM) / 2;
+  loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+  loupeCtx.drawImage(canvas,
+    cx - halfW, cy - halfH, halfW*2, halfH*2,   // source region
+    0, 0, LOUPE_SIZE, LOUPE_SIZE                  // dest
+  );
+
+  // Position loupe near cursor, avoiding screen edges
+  const lx = clientX + LOUPE_OFFSET;
+  const ly = clientY - LOUPE_SIZE / 2;
+  const maxX = window.innerWidth  - LOUPE_SIZE - 10;
+  const maxY = window.innerHeight - LOUPE_SIZE - 10;
+  loupeEl.style.left = Math.max(10, Math.min(maxX, lx)) + 'px';
+  loupeEl.style.top  = Math.max(10, Math.min(maxY, ly)) + 'px';
+}
+
+function recordPlacement(clientX, clientY) {
+  if (placingIdx === null || !canvas.width) return;
+  const rect = canvas.getBoundingClientRect();
+  const nx = (clientX - rect.left) * (canvas.width  / rect.width)  / canvas.width;
+  const ny = (clientY - rect.top)  * (canvas.height / rect.height) / canvas.height;
+  // Apply to all indices in the merged group
+  for (const i of placingAllIdxs) {
+    manualLandmarks[i] = { x: nx, y: ny };
+    nodeListEl.querySelector(`.node-place-btn[data-lm-idx="${i}"]`)?.classList.replace('placing','placed');
+  }
+  const btn = nodeListEl.querySelector(`.node-place-btn[data-lm-idx="${placingIdx}"]`);
+  if (btn) { btn.classList.remove('placing'); btn.classList.add('placed'); }
+  cancelPlacing();
+  fullReRender();
+}
+
+// Mouse events on canvas
+canvas.addEventListener('mousemove', e => {
+  if (placingIdx !== null) {
+    updateLoupe(e.clientX, e.clientY);
+    return;
+  }
+  // Ref line hover cursor
+  if (!canvas.width) return;
+  const {x,y} = getCanvasPos(e);
+  if (refLines.h!==null && Math.abs(y-refLines.h*canvas.height)<12) canvas.style.cursor='ns-resize';
+  else if (refLines.v!==null && Math.abs(x-refLines.v*canvas.width)<12) canvas.style.cursor='ew-resize';
+  else canvas.style.cursor='';
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (placingIdx !== null) { e.preventDefault(); updateLoupe(e.clientX, e.clientY); return; }
+  if (!canvas.width) return;
+  const {x,y} = getCanvasPos(e);
+  if (refLines.h!==null && Math.abs(y-refLines.h*canvas.height)<12) { draggingRef='h'; canvas.style.cursor='ns-resize'; e.preventDefault(); return; }
+  if (refLines.v!==null && Math.abs(x-refLines.v*canvas.width)<12)  { draggingRef='v'; canvas.style.cursor='ew-resize'; e.preventDefault(); return; }
+});
+
+canvas.addEventListener('mousemove', e => {
+  if (draggingRef) {
+    const {x,y} = getCanvasPos(e);
+    if (draggingRef==='h') refLines.h = Math.max(0.01,Math.min(0.99,y/canvas.height));
+    else                    refLines.v = Math.max(0.01,Math.min(0.99,x/canvas.width));
+    fullReRender();
+  }
+}, true);  // capture phase so it runs even during placement
+
+canvas.addEventListener('mouseup', e => {
+  if (placingIdx !== null) { recordPlacement(e.clientX, e.clientY); return; }
+  draggingRef = null;
+  canvas.style.cursor = '';
+});
+
+canvas.addEventListener('mouseleave', e => {
+  loupeEl.style.display = 'none';
+  if (draggingRef) draggingRef = null;
+});
+canvas.addEventListener('mouseenter', e => {
+  if (placingIdx !== null) loupeEl.style.display = 'block';
+});
+
+document.addEventListener('keydown', e => { if (e.key==='Escape') cancelPlacing(); });
+
+// ─── Reference line buttons ────────────────────────────────────────────────
+refHBtn.addEventListener('click', () => { refLines.h = refLines.h!==null?null:0.5; refHBtn.classList.toggle('active',refLines.h!==null); fullReRender(); });
+refVBtn.addEventListener('click', () => { refLines.v = refLines.v!==null?null:0.5; refVBtn.classList.toggle('active',refLines.v!==null); fullReRender(); });
+
+function getCanvasPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = (e.touches?e.touches[0].clientX:e.clientX)-rect.left;
+  const cy = (e.touches?e.touches[0].clientY:e.clientY)-rect.top;
+  return { x:cx*(canvas.width/rect.width), y:cy*(canvas.height/rect.height) };
+}
+
+// ─── MediaPipe ─────────────────────────────────────────────────────────────
+function initPose() {
+  showLoading('Initializing model…');
+  poseModel = new Pose({ locateFile: f=>`https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${f}` });
+  poseModel.setOptions({modelComplexity:1,smoothLandmarks:false,enableSegmentation:false,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
+  poseModel.onResults(onResults);
+  poseModel.initialize().then(()=>{ modelReady=true; hideLoading(); setStatus('ready','Model ready · drop an image'); })
+    .catch(err=>{ hideLoading(); setStatus('','Model load failed'); console.error(err); });
+}
+
+function onResults(results) {
+  hideLoading();
+  canvas.width=results.image.width; canvas.height=results.image.height;
+  ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(results.image,0,0);
+  if (results.poseLandmarks) {
+    lastPoseLandmarks=results.poseLandmarks; fullReRender(); setStatus('ready','Pose detected');
+  } else { lastPoseLandmarks=null; clearResults(); setStatus('','No pose detected — try a clearer image'); }
+}
+
+// ─── Merge landmarks ───────────────────────────────────────────────────────
+// For merged pairs: copy the best-visible side's coords to the other so the
+// skeleton draws a single line and angles use consistent positions.
+// Manual overrides: if one side was explicitly placed, that position wins for
+// BOTH sides of the merged pair (user intent). If both placed, use each own.
+function getMerged() {
+  const base = lastPoseLandmarks
+    ? lastPoseLandmarks.map(l=>({...l}))
+    : Array(33).fill(null).map(()=>({x:0,y:0,z:0,visibility:0}));
+  // Apply manual overrides first — only the explicitly placed indices
+  for (const [i,pos] of Object.entries(manualLandmarks))
+    base[+i]={x:pos.x,y:pos.y,z:0,visibility:1.0,manual:true};
+  // Now sync merged pairs: pick one representative position for both sides
+  const pose = currentPoseKey ? POSE_LIBRARY[currentPoseKey] : null;
+  if (pose) {
+    for (const [a,b] of resolveMergedNodes(pose.mergedNodes)) {
+      const manA = !!manualLandmarks[a], manB = !!manualLandmarks[b];
+      if (manA && !manB) {
+        // A was placed manually → use A's position for B too
+        base[b] = {...base[a]};
+      } else if (manB && !manA) {
+        // B was placed manually → use B's position for A too
+        base[a] = {...base[b]};
+      } else if (!manA && !manB) {
+        // Neither placed — use the more-visible MediaPipe side for both
+        const va = base[a]?.visibility ?? 0, vb = base[b]?.visibility ?? 0;
+        if (va >= vb) base[b] = {...base[a]};
+        else          base[a] = {...base[b]};
+      }
+      // If both manually placed: leave each at its own position (no sync)
+    }
+  }
+  // Compute virtual landmark 33 = C Hip: midpoint of L Hip (23) and R Hip (24)
+  const lh = base[23], rh = base[24];
+  if (lh && rh && (lh.visibility > 0.1 || rh.visibility > 0.1)) {
+    base[33] = {
+      x: (lh.x + rh.x) / 2,
+      y: (lh.y + rh.y) / 2,
+      z: (lh.z + rh.z) / 2,
+      visibility: Math.min(lh.visibility, rh.visibility),
+    };
+  } else {
+    base[33] = { x: 0, y: 0, z: 0, visibility: 0 };
+  }
+  return base;
+}
+
+// ─── Angle math ────────────────────────────────────────────────────────────
+function angle3(a,b,c) {
+  const W=canvas.width||1, H=canvas.height||1;
+  const bax=(a.x-b.x)*W, bay=(a.y-b.y)*H;
+  const bcx=(c.x-b.x)*W, bcy=(c.y-b.y)*H;
+  const dot=bax*bcx+bay*bcy;
+  const mag=Math.hypot(bax,bay)*Math.hypot(bcx,bcy);
+  if(mag===0) return 0;
+  return Math.round(Math.acos(Math.max(-1,Math.min(1,dot/mag)))*180/Math.PI);
+}
+
+function getActiveJoints(lm) {
+  const vis=i=>lm[i]&&lm[i].visibility>0.35;
+  const joints=[];
+  for (const jd of JOINT_DEFS) {
+    if (!activeJoints.has(jd.id)) continue;
+    for (const p of jd.pairs) {
+      if (p.idxs.every(i=>vis(i))) {
+        const raw = angle3(lm[p.idxs[0]],lm[p.idxs[1]],lm[p.idxs[2]]);
+        const angle = complementaryJoints.has(jd.id) ? 360 - raw : raw;
+        joints.push({name:p.name, angle, rawAngle:raw,
+                     idxs:p.idxs, jointId:jd.id, side:p.name.startsWith('L')?'L':'R',
+                     isComplementary: complementaryJoints.has(jd.id)});
+      }
+    }
+  }
+  return joints;
+}
+
+// ─── Metric resolution ─────────────────────────────────────────────────────
+function evalTarget(value, t) {
+  if (t.op==='<') return value<t.value ? 'good' : value<t.value*1.3 ? 'warn' : 'bad';
+  if (t.op==='>') return value>t.value ? 'good' : value>t.value*0.8 ? 'warn' : 'bad';
+  if (t.op==='~') {
+    const tol=t.tolerance||10;
+    return Math.abs(value-t.value)<=tol ? 'good' : Math.abs(value-t.value)<=tol*2 ? 'warn' : 'bad';
+  }
+  return 'warn';
+}
+
+// Returns color string based on metric target evaluation
+function metricColor(value, target) {
+  const s = evalTarget(value, target);
+  return s==='good' ? '#00ffc2' : s==='warn' ? '#ffd700' : '#ff4f8b';
+}
+
+// Pixel distance between two landmarks (normalized coords → pixel space)
+function lmDistance(a, b) {
+  if (!a || !b || a.visibility < 0.2 || b.visibility < 0.2) return null;
+  const W = canvas.width || 1, H = canvas.height || 1;
+  return Math.hypot((a.x - b.x) * W, (a.y - b.y) * H);
+}
+
+function resolveMetric(metric, joints, lm) {
+  // ── Distance metric ──────────────────────────────────────────────────────
+  if (metric.type === 'distance') {
+    if (!lm) return null;
+    const fromIdx = LM_IDX[metric.from], toIdx = LM_IDX[metric.to];
+    if (fromIdx == null || toIdx == null) return null;
+    const rawPx = lmDistance(lm[fromIdx], lm[toIdx]);
+    if (rawPx === null) return null;
+
+    let value, display, unit;
+    if (metric.unit === 'ratio') {
+      // Ratio requires a second reference distance for normalization
+      if (metric.refFrom && metric.refTo) {
+        const refFromIdx = LM_IDX[metric.refFrom], refToIdx = LM_IDX[metric.refTo];
+        const refPx = lmDistance(lm[refFromIdx], lm[refToIdx]);
+        if (!refPx) return null;
+        value = Math.round((rawPx / refPx) * 100) / 100;
+        display = value.toFixed(2);
+        unit = 'ratio';
+      } else if (calibrationHeight) {
+        // Use body height ref: estimate pixel-per-cm from calibrationHeight
+        // We need a reference pixel length — use the full body height estimation:
+        // approximate from shoulder(11/12) to ankle(27/28) as ~85% of total height
+        const shoulderIdx = LM_IDX['L Shoulder'] ?? 11;
+        const ankleIdx    = LM_IDX['L Ankle']    ?? 27;
+        const sh = lm[shoulderIdx], an = lm[ankleIdx];
+        if (!sh || !an) return null;
+        const bodyPx = Math.hypot((sh.x - an.x) * (canvas.width||1), (sh.y - an.y) * (canvas.height||1));
+        const pxPerCm = bodyPx / (calibrationHeight * 0.85);
+        if (!pxPerCm) return null;
+        const cm = rawPx / pxPerCm;
+        value = Math.round((cm / calibrationHeight) * 100) / 100;
+        display = value.toFixed(2);
+        unit = 'ratio';
+      } else {
+        return null; // distance metric needs calibration — skip silently
+      }
+    } else {
+      value = Math.round(rawPx);
+      display = value + 'px';
+      unit = 'px';
+    }
+
+    const status = evalTarget(value, metric.target);
+    const color  = status==='good'?'#00ffc2':status==='warn'?'#ffd700':'#ff4f8b';
+    const barPct = Math.min(100, Math.round(value * 100));
+    const opStr  = metric.target.op==='<'?`< ${metric.target.value}`
+                 : metric.target.op==='>'?`> ${metric.target.value}`
+                 : `~${metric.target.value}`;
+    const targetStr = `Target ${opStr}${unit === 'ratio' ? ' ratio' : unit === 'px' ? 'px' : ''}`;
+    const needsCalib = metric.unit === 'ratio' && !calibrationHeight && !metric.refFrom;
+    return {value, display, label: metric.name, color, barPct, status, targetStr,
+            desc: metric.desc, target: metric.target,
+            needsCalib};
+  }
+
+  // ── Angle metric (default) ───────────────────────────────────────────────
+  const byJointSide={};
+  for (const j of joints) byJointSide[j.jointId+'-'+j.side]=j.angle;
+  const L=byJointSide[metric.joint+'-L'], R=byJointSide[metric.joint+'-R'];
+  let value=null;
+  if      (metric.side==='best') { if(L!=null&&R!=null){const t=metric.target.value;value=Math.abs(L-t)<Math.abs(R-t)?L:R;}else value=L??R??null; }
+  else if (metric.side==='avg')  { if(L!=null&&R!=null)value=Math.round((L+R)/2);else value=L??R??null; }
+  else if (metric.side==='diff') { value=(L!=null&&R!=null)?Math.abs(L-R):null; }
+  else if (metric.side==='L')    { value=L??null; }
+  else if (metric.side==='R')    { value=R??null; }
+  if (value===null) return null;
+  const status=evalTarget(value,metric.target);
+  const color=status==='good'?'#00ffc2':status==='warn'?'#ffd700':'#ff4f8b';
+  const barPct=Math.min(100,Math.round(value/180*100));
+  const targetStr=metric.target.op==='<'?`Target < ${metric.target.value}°`
+                 :metric.target.op==='>'?`Target > ${metric.target.value}°`
+                 :`Target ~${metric.target.value}°`;
+  return {value,display:`${value}°`,label:metric.name,color,barPct,status,targetStr,desc:metric.desc,target:metric.target};
+}
+
+// ─── Skeleton ──────────────────────────────────────────────────────────────
+function drawSkeleton(lm) {
+  const W=canvas.width, H=canvas.height, lw=Math.max(1.5,2*Math.max(W,H)/600);
+  const drawn=new Set();
+  for (const jd of JOINT_DEFS) {
+    if (!activeJoints.has(jd.id)) continue;
+    const isSplit = jd.id === 'lunge_split' || jd.id === 'middle_split';
+    for (const [a,b] of (JOINT_CONNECTIONS[jd.id]||[])) {
+      const key=Math.min(a,b)+'-'+Math.max(a,b); if(drawn.has(key))continue; drawn.add(key);
+      const pa=lm[a],pb=lm[b]; if(!pa||!pb||pa.visibility<0.3||pb.visibility<0.3)continue;
+      const vis=Math.min(pa.visibility,pb.visibility);
+      if (isSplit) {
+        // Draw split angle line as a distinct cyan dashed line
+        ctx.save();
+        ctx.setLineDash([6,5]);
+        ctx.strokeStyle=`rgba(0,255,194,${vis*0.6})`;
+        ctx.lineWidth=Math.max(1.5,2*Math.max(W,H)/600);
+        ctx.beginPath(); ctx.moveTo(pa.x*W,pa.y*H); ctx.lineTo(pb.x*W,pb.y*H); ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.strokeStyle=`rgba(255,255,255,${vis*0.45})`;
+        ctx.lineWidth=lw; ctx.beginPath(); ctx.moveTo(pa.x*W,pa.y*H); ctx.lineTo(pb.x*W,pb.y*H); ctx.stroke();
+      }
+    }
+  }
+}
+
+// ─── Reference lines ───────────────────────────────────────────────────────
+function drawRefLines() {
+  const W=canvas.width,H=canvas.height,sc=Math.max(W,H)/600;
+  ctx.save(); ctx.setLineDash([8,6]);
+  if (refLines.h!==null) {
+    const y=refLines.h*H;
+    ctx.strokeStyle='rgba(123,94,167,0.25)'; ctx.lineWidth=Math.max(3,5*sc); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.strokeStyle='rgba(123,94,167,0.9)';  ctx.lineWidth=Math.max(1,1.5*sc); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#7b5ea7'; ctx.beginPath(); ctx.arc(W-20,y,6*sc,0,Math.PI*2); ctx.fill();
+    ctx.font=`bold ${Math.round(10*sc)}px "Space Mono",monospace`; ctx.fillStyle='rgba(123,94,167,0.85)';
+    ctx.textAlign='right'; ctx.textBaseline='bottom'; ctx.fillText('H',W-30,y-4);
+    ctx.setLineDash([8,6]);
+  }
+  if (refLines.v!==null) {
+    const x=refLines.v*W;
+    ctx.strokeStyle='rgba(123,94,167,0.25)'; ctx.lineWidth=Math.max(3,5*sc); ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    ctx.strokeStyle='rgba(123,94,167,0.9)';  ctx.lineWidth=Math.max(1,1.5*sc); ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='#7b5ea7'; ctx.beginPath(); ctx.arc(x,20,6*sc,0,Math.PI*2); ctx.fill();
+    ctx.font=`bold ${Math.round(10*sc)}px "Space Mono",monospace`; ctx.fillStyle='rgba(123,94,167,0.85)';
+    ctx.textAlign='left'; ctx.textBaseline='top'; ctx.fillText('V',x+10,8);
+    ctx.setLineDash([8,6]);
+  }
+  ctx.restore();
+}
+
+// ─── Angle overlays ────────────────────────────────────────────────────────
+// Color is target-aware in pose mode, fallback to generic in free mode
+function jointColorInContext(jointId, angle, joints) {
+  const pose = currentPoseKey ? POSE_LIBRARY[currentPoseKey] : null;
+  if (!pose) {
+    return angle>150?'#00ffc2':angle>100?'#ffd700':'#ff4f8b';
+  }
+  // Find the metric that matches this joint
+  const resolved = pose.metrics.map(m=>resolveMetric(m,joints,getMerged())).filter(Boolean);
+  const match = resolved.find(r => {
+    const metric = pose.metrics.find(m=>m.name===r.label);
+    return metric && metric.joint === jointId;
+  });
+  return match ? match.color : '#aaaaaa';
+}
+
+function drawAngleOverlays(joints, lm) {
+  const W=canvas.width,H=canvas.height,sc=Math.max(W,H)/600;
+  const fontSize=Math.round(Math.max(11,13*sc));
+  const arcR=Math.round(Math.max(14,22*sc));
+  const pillH=Math.round(fontSize*1.9);
+  const lineLen=Math.round(Math.max(28,40*sc));
+
+  let sumX=0,sumY=0,cnt=0;
+  for(const l of lm){if(l&&l.visibility>0.3){sumX+=l.x*W;sumY+=l.y*H;cnt++;}}
+  const cX=sumX/(cnt||1),cY=sumY/(cnt||1);
+
+  // Deduplicate: skip if same joint+vertex already drawn (handles merged L/R pairs)
+  // Use jointId+vertex as key so different joints at the same landmark each get their overlay
+  const drawnVertices=new Set();
+
+  for(const j of joints){
+    // Only draw overlay if this joint is in visibleJoints
+    if (!visibleJoints.has(j.jointId)) continue;
+    const [ia,ib,ic]=j.idxs;
+    const canonVtx=canonical(ib);
+    const dedupKey=j.jointId+':'+canonVtx;
+    if(drawnVertices.has(dedupKey)) continue;
+    drawnVertices.add(dedupKey);
+
+    const la=lm[ia],lb=lm[ib],lc=lm[ic];
+    if(!la||!lb||!lc) continue;
+    const bx=lb.x*W,by=lb.y*H,ax=la.x*W,ay=la.y*H,cx=lc.x*W,cy=lc.y*H;
+    const col=jointColorInContext(j.jointId, j.angle, joints);
+
+    const a1=Math.atan2(ay-by,ax-bx), a2=Math.atan2(cy-by,cx-bx);
+
+    // Normalise arc sweep so we know exact start/end for midpoint computation.
+    // Determine which canvas arc direction (CW=false, CCW=true) corresponds to
+    // the measured angle. We do this by computing the CW sweep and comparing.
+    const cwSweep = ((a2 - a1) % (2*Math.PI) + 2*Math.PI) % (2*Math.PI); // 0..2π CW
+    // Canvas arc(false) sweeps CW by cwSweep radians → angle in degrees = cwSweep*180/π
+    const cwDeg = Math.round(cwSweep * 180 / Math.PI);
+    // The measured rawAngle is always 0-180. Match whichever side is closer.
+    const innerIsCW = Math.abs(cwDeg - j.rawAngle) < Math.abs((360 - cwDeg) - j.rawAngle);
+    // "inner" = the arc matching rawAngle; "outer" = the reflex arc (360-rawAngle)
+    // Bold the arc that matches the displayed value
+    const boldCCW = j.isComplementary ? innerIsCW : !innerIsCW;
+    // boldCCW=true means the bold arc uses anticlockwise=true
+
+    ctx.beginPath();ctx.arc(bx,by,arcR,a1,a2,boldCCW);
+    ctx.strokeStyle=col;ctx.lineWidth=Math.max(2,2.5*sc);ctx.stroke();
+    ctx.beginPath();ctx.arc(bx,by,arcR,a1,a2,!boldCCW);
+    ctx.strokeStyle=col+'33';ctx.lineWidth=Math.max(1,1.5*sc);ctx.stroke();
+
+    // Midpoint angle of the bold arc for leader/label direction
+    let sweepDelta;
+    if (!boldCCW) {
+      // bold arc is CW (false): span = cwSweep
+      sweepDelta = cwSweep;
+    } else {
+      // bold arc is CCW (true): span = 2π - cwSweep
+      sweepDelta = -(2*Math.PI - cwSweep);
+    }
+    const midAng = a1 + sweepDelta / 2;
+    let bsX = Math.cos(midAng), bsY = Math.sin(midAng);
+    // Push label away from body centroid
+    if (bsX*(cX-bx)+bsY*(cY-by) > 0) { bsX=-bsX; bsY=-bsY; }
+
+    const lsX=bx+bsX*(arcR+4),lsY=by+bsY*(arcR+4),leX=bx+bsX*(arcR+lineLen),leY=by+bsY*(arcR+lineLen);
+    ctx.beginPath();ctx.moveTo(lsX,lsY);ctx.lineTo(leX,leY);
+    ctx.strokeStyle=col;ctx.lineWidth=Math.max(1,1.2*sc);ctx.setLineDash([3,3]);ctx.stroke();ctx.setLineDash([]);
+
+    // Label: strip L/R prefix if merged; add ~ indicator if complementary
+    const isMergedVtx = mergeMap[ib]!==undefined;
+    const labelName = isMergedVtx ? j.name.replace(/^[LR] /,'') : j.name;
+    const compMark = j.isComplementary ? '∠' : '';
+    const label=`${labelName}  ${compMark}${j.angle}°`;
+    ctx.font=`bold ${fontSize}px "Space Mono",monospace`;
+    const tw=ctx.measureText(label).width;
+    const pW=tw+fontSize*1.2,pX=leX+bsX*6,pY=leY+bsY*6;
+    ctx.save();ctx.translate(pX,pY);
+    ctx.beginPath();ctx.roundRect(-pW/2,-pillH/2,pW,pillH,pillH*0.4);
+    ctx.fillStyle='rgba(10,10,15,0.82)';ctx.fill();
+    ctx.strokeStyle=col;ctx.lineWidth=Math.max(1,1.2*sc);ctx.stroke();
+    ctx.fillStyle=col;ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillText(label,0,0);ctx.restore();
+    ctx.beginPath();ctx.arc(bx,by,Math.max(3,4*sc),0,Math.PI*2);ctx.fillStyle=col;ctx.fill();
+  }
+}
+
+// ─── Distance overlays ────────────────────────────────────────────────────
+// Draw a dashed line between two landmarks with the metric value as a pill label
+function drawDistanceOverlays(lm) {
+  const pose = currentPoseKey ? POSE_LIBRARY[currentPoseKey] : null;
+  if (!pose) return;
+  const W=canvas.width, H=canvas.height, sc=Math.max(W,H)/600;
+  const fontSize=Math.round(Math.max(10,12*sc));
+  const pillH=Math.round(fontSize*1.9);
+
+  for (const metric of pose.metrics) {
+    if (metric.type !== 'distance') continue;
+    const fromIdx = LM_IDX[metric.from], toIdx = LM_IDX[metric.to];
+    if (fromIdx == null || toIdx == null) continue;
+    const pa = lm[fromIdx], pb = lm[toIdx];
+    if (!pa || !pb || pa.visibility < 0.25 || pb.visibility < 0.25) continue;
+
+    const resolved = resolveMetric(metric, [], lm);
+    if (!resolved) continue;   // needs calibration or landmarks missing
+
+    const x1=pa.x*W, y1=pa.y*H, x2=pb.x*W, y2=pb.y*H;
+    const col = resolved.color;
+
+    // Dashed line between the two landmarks
+    ctx.save();
+    ctx.setLineDash([6,4]);
+    ctx.strokeStyle = col;
+    ctx.lineWidth = Math.max(1.5, 2*sc);
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+    ctx.restore();
+
+    // Endpoint dots
+    for (const [ex,ey] of [[x1,y1],[x2,y2]]) {
+      ctx.beginPath(); ctx.arc(ex,ey,Math.max(3,4*sc),0,Math.PI*2);
+      ctx.fillStyle=col; ctx.fill();
+    }
+
+    // Pill label at midpoint, offset perpendicular to line
+    const mx=(x1+x2)/2, my=(y1+y2)/2;
+    const dx=x2-x1, dy=y2-y1, len=Math.hypot(dx,dy)||1;
+    // Perpendicular unit vector, flipped to point away from image centre
+    let nx=-dy/len, ny=dx/len;
+    const cX=W/2, cY=H/2;
+    if (nx*(cX-mx)+ny*(cY-my) > 0) { nx=-nx; ny=-ny; }
+    const offset = Math.max(16, 20*sc);
+    const lx=mx+nx*offset, ly=my+ny*offset;
+
+    const labelText = `${metric.name}  ${resolved.display}`;
+    ctx.font=`bold ${fontSize}px "Space Mono",monospace`;
+    const tw=ctx.measureText(labelText).width;
+    const pW=tw+fontSize*1.2;
+    ctx.save(); ctx.translate(lx,ly);
+    ctx.beginPath(); ctx.roundRect(-pW/2,-pillH/2,pW,pillH,pillH*0.4);
+    ctx.fillStyle='rgba(10,10,15,0.82)'; ctx.fill();
+    ctx.strokeStyle=col; ctx.lineWidth=Math.max(1,1.2*sc); ctx.stroke();
+    ctx.fillStyle=col; ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.fillText(labelText,0,0); ctx.restore();
+  }
+}
+
+// ─── Manual dots ──────────────────────────────────────────────────────────
+function drawManualDots() {
+  const W=canvas.width,H=canvas.height,sc=Math.max(W,H)/600;
+  // Only draw one dot per canonical position
+  const drawnPos=new Set();
+  for(const [i,pos] of Object.entries(manualLandmarks)){
+    const key=pos.x.toFixed(4)+','+pos.y.toFixed(4);
+    if(drawnPos.has(key))continue; drawnPos.add(key);
+    const x=pos.x*W,y=pos.y*H;
+    const isMergedNode=mergeMap[+i]!==undefined;
+    const name=isMergedNode?(LM[+i]||'').replace(/^[LR] /,''):(LM[+i]||'');
+    ctx.beginPath();ctx.arc(x,y,Math.max(9,11*sc),0,Math.PI*2);
+    ctx.strokeStyle='rgba(240,165,0,0.75)';ctx.lineWidth=Math.max(1.5,2*sc);ctx.setLineDash([3,3]);ctx.stroke();ctx.setLineDash([]);
+    ctx.beginPath();ctx.arc(x,y,Math.max(3,4*sc),0,Math.PI*2);ctx.fillStyle='#f0a500';ctx.fill();
+    if(name){
+      const fs=Math.round(Math.max(8,9*sc));
+      ctx.font=`bold ${fs}px "Space Mono",monospace`;
+      const tw=ctx.measureText(name).width,ly=y-Math.max(15,18*sc);
+      ctx.fillStyle='rgba(10,10,15,0.85)';ctx.fillRect(x-tw/2-3,ly-fs,tw+6,fs+3);
+      ctx.fillStyle='#f0a500';ctx.textAlign='center';ctx.textBaseline='bottom';
+      ctx.fillText(name,x,ly+1);
+    }
+  }
+}
+
+// ─── Metrics card ──────────────────────────────────────────────────────────
+function renderMetrics(joints) {
+  const pose = currentPoseKey ? POSE_LIBRARY[currentPoseKey] : null;
+  if (!pose) { metricsCard.style.display='none'; return; }
+  metricsCard.style.display='';
+  metricsTitle.textContent = pose.label + ' — Metrics';
+  const resolved = pose.metrics.map(m=>resolveMetric(m,joints,getMerged())).filter(Boolean);
+  if (!resolved.length) { metricsSection.innerHTML='<div class="empty-state">No landmarks detected yet</div>'; return; }
+  // Also show distance metrics that need calibration as pending
+  const pendingDist = pose.metrics.filter(m => m.type==='distance' && m.unit==='ratio' && !calibrationHeight && !m.refFrom);
+  const pendingHtml = pendingDist.map(m=>`
+    <div class="metric-block">
+      <div class="metric-name"><span>${m.name}</span><span style="font-size:9px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase">needs calib</span></div>
+      <div style="font-size:10px;color:var(--muted);margin-top:4px;line-height:1.5">Enter your height in the Calibration card above to enable this metric.</div>
+      <div style="font-size:9px;color:var(--muted);margin-top:4px;line-height:1.5">${m.desc}</div>
+    </div>`).join('');
+  metricsSection.innerHTML = resolved.map(r=>`
+    <div class="metric-block">
+      <div class="metric-name">
+        <span>${r.label}</span>
+        <span style="font-size:9px;color:${r.color};letter-spacing:0.08em;text-transform:uppercase">${r.status}</span>
+      </div>
+      <div class="metric-value ${r.status}">${r.display}</div>
+      <div class="metric-target">${r.targetStr}</div>
+      <div class="metric-bar-track"><div class="metric-bar-fill" style="width:${r.barPct}%;background:${r.color}"></div></div>
+      <div style="font-size:9px;color:var(--muted);margin-top:5px;line-height:1.5">${r.desc}</div>
+    </div>`).join('') + pendingHtml;
+}
+
+// ─── Full re-render ─────────────────────────────────────────────────────────
+function fullReRender() {
+  if (!sourceImg.naturalWidth) return;
+  const lm = getMerged();
+  canvas.width=sourceImg.naturalWidth; canvas.height=sourceImg.naturalHeight;
+  ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(sourceImg,0,0);
+  drawSkeleton(lm);
+  drawRefLines();
+
+  const joints = getActiveJoints(lm);
+
+  // Update node list confidence + angle badges
+  for (let i=0;i<33;i++) {
+    const ce=document.getElementById('nc-'+i), ae=document.getElementById('na-'+i);
+    if (ce) {
+      const v=lm[i]?Math.round(lm[i].visibility*100):0;
+      const isM=!!manualLandmarks[i];
+      ce.textContent=isM?'✎':(v>0?v+'%':'');
+      ce.style.color=isM?'var(--manual)':v>60?'var(--accent)':v>30?'#ffd700':'var(--accent2)';
+    }
+    if (ae) ae.textContent='';
+  }
+  // Write angle to vertex row — deduplicate per joint+vertex so cross-body joints
+  // (like lunge_split) get their own row even when sharing a vertex with another joint
+  const writtenKeys=new Set();
+  for (const j of joints) {
+    const canon=canonical(j.idxs[1]);
+    const key=j.jointId+':'+canon;
+    if(writtenKeys.has(key))continue; writtenKeys.add(key);
+    const el=document.getElementById('na-'+j.idxs[1]);
+    if (el) {
+      el.textContent=j.angle+'°';
+      el.style.color=jointColorInContext(j.jointId,j.angle,joints);
+    }
+  }
+
+  drawAngleOverlays(joints, lm);
+  drawDistanceOverlays(lm);
+  drawManualDots();
+  renderMetrics(joints);
+  updateInsights(joints);
+}
+
+// ─── Insights ──────────────────────────────────────────────────────────────
+function updateInsights(joints) {
+  if (currentPoseKey) {
+    insightsSection.innerHTML='<div class="empty-state" style="display:none"></div>';
+    document.getElementById('insights-card').style.display='none';
+    return;
+  }
+  document.getElementById('insights-card').style.display='';
+  const j={};
+  for(const jt of joints) j[jt.name]=jt.angle;
+  const ins=[];
+  const diff=(a,b)=>j[a]!=null&&j[b]!=null?Math.abs(j[a]-j[b]):null;
+  const kd=diff('L Knee','R Knee'),hd=diff('L Hip','R Hip');
+  if(kd!==null&&kd>20) ins.push({l:'red',t:`<strong>Knee asymmetry</strong> ${kd}°`});
+  else if(kd!==null&&kd<10) ins.push({l:'green',t:`<strong>Knee symmetry</strong> good`});
+  if(hd!==null&&hd>20) ins.push({l:'red',t:`<strong>Hip asymmetry</strong> ${hd}°`});
+  if(!ins.length&&joints.length) ins.push({l:'green',t:`<strong>Alignment looks balanced</strong>`});
+  if(!joints.length){insightsSection.innerHTML='<div class="empty-state">No joints detected</div>';return;}
+  insightsSection.innerHTML=ins.map(i=>`<div class="insight-item"><div class="insight-dot dot-${i.l}"></div><div class="insight-text">${i.t}</div></div>`).join('');
+}
+
+// ─── Clear ─────────────────────────────────────────────────────────────────
+function clearResults() {
+  insightsSection.innerHTML='<div class="empty-state">Insights will appear after detection</div>';
+  metricsSection.innerHTML=''; metricsCard.style.display='none';
+  for(let i=0;i<33;i++){
+    const c=document.getElementById('nc-'+i),a=document.getElementById('na-'+i);
+    if(c)c.textContent='';if(a)a.textContent='';
+  }
+}
+
+// ─── Process image ─────────────────────────────────────────────────────────
+function processImage(file) {
+  if(!modelReady){alert('Model still loading…');return;}
+  if(!file||!file.type.startsWith('image/')){alert('Please provide an image file.');return;}
+  lastPoseLandmarks=null; manualLandmarks={}; cancelPlacing();
+  nodeListEl.querySelectorAll('.node-place-btn').forEach(b=>b.classList.remove('placed'));
+  showLoading('Detecting pose…'); dropZone.classList.add('hidden');
+  const reader=new FileReader();
+  reader.onload=e=>{
+    const dataUrl=e.target.result;
+    sourceImg.onload=null; sourceImg.src='';
+    sourceImg.onload=async()=>{
+      canvas.width=sourceImg.naturalWidth; canvas.height=sourceImg.naturalHeight;
+      setStatus('','Analyzing…');
+      try{poseModel.reset();await poseModel.send({image:sourceImg});}
+      catch(err){hideLoading();setStatus('','Detection error');console.error(err);}
+    };
+    sourceImg.src=dataUrl;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ─── UI helpers ────────────────────────────────────────────────────────────
+function showLoading(msg){loadingText.textContent=msg;loadingEl.classList.add('active');}
+function hideLoading(){loadingEl.classList.remove('active');}
+function setStatus(type,msg){
+  statusBar.className='status-bar'+(type?' '+type:'');
+  statusBar.innerHTML=`<span class="dot"></span>${msg}`;
+}
+
+// ─── Events ────────────────────────────────────────────────────────────────
+uploadBtn.addEventListener('click',()=>fileInput.click());
+fileInput.addEventListener('change',e=>{if(e.target.files[0])processImage(e.target.files[0]);e.target.value='';});
+dropZone.addEventListener('click',()=>fileInput.click());
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag-over');if(e.dataTransfer.files[0])processImage(e.dataTransfer.files[0]);});
+clearBtn.addEventListener('click',()=>{
+  ctx.clearRect(0,0,canvas.width,canvas.height); canvas.width=0; canvas.height=0;
+  sourceImg.src=''; lastPoseLandmarks=null; manualLandmarks={}; cancelPlacing();
+  refLines={h:null,v:null}; refHBtn.classList.remove('active'); refVBtn.classList.remove('active');
+  dropZone.classList.remove('hidden'); clearResults();
+  setStatus('ready','Model ready · drop an image');
+});
+
+// ─── Boot ──────────────────────────────────────────────────────────────────
+buildPoseChips();
+buildNodeList();
+initPose();
+</script>
+</body>
+</html>
