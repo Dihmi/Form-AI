@@ -233,11 +233,24 @@ main{padding:24px 0 40px;display:grid;grid-template-columns:1fr 360px;gap:20px;a
 // mergedNodes: pairs of landmark names (from the LM map) that should be treated as one.
 //   e.g. ['L Shoulder', 'R Shoulder'] — use names, never raw indices.
 //
-// metrics[].side:
+// metrics[].side (angle metrics):
 //   'best' — pick whichever of L/R is closer to target
 //   'avg'  — average of L and R
 //   'diff' — absolute difference (for symmetry checks)
 //   'L'/'R' — specific side only
+//
+// DISTANCE METRICS — add  type: 'distance'  to any metric entry:
+//   from / to         — landmark names (derived nodes like 'C Hip' work too)
+//   unit: 'px'        — raw pixel distance, no calibration needed
+//   unit: 'ratio'     — normalised distance. Supply ONE of:
+//       refFrom + refTo   → ratio = dist / refDist  (landmark-relative, no calibration)
+//       (neither)         → ratio relative to body height (requires Calibration card)
+//
+// DERIVED NODES — defined in the DERIVED_NODES registry (just below the LM table):
+//   Built-in: 'C Hip' — midpoint of L Hip + R Hip, always available.
+//   To add your own: append an entry to DERIVED_NODES — no other code changes needed.
+//   Derived node names can be used anywhere a landmark name is accepted:
+//   JOINT_DEFS idxs, distance metric from/to/refFrom/refTo.
 
 const POSE_LIBRARY = {
   downdog: {
@@ -432,7 +445,7 @@ const POSE_LIBRARY = {
   },
 };
 
-// ─── Landmark definitions ──────────────────────────────────────────────────
+// ─── Landmark definitions (MediaPipe indices 0–32) ────────────────────────
 const LM = {
   11:'L Shoulder', 12:'R Shoulder',
   13:'L Elbow',    14:'R Elbow',
@@ -443,11 +456,30 @@ const LM = {
   27:'L Ankle',    28:'R Ankle',
   29:'L Heel',     30:'R Heel',
   31:'L Foot Tip', 32:'R Foot Tip',
-  // Virtual landmarks (computed, not from MediaPipe)
-  33:'C Hip',   // midpoint of L Hip (23) and R Hip (24)
 };
 
-// Reverse map: name → index (for human-readable mergedNodes in POSE_LIBRARY)
+// ─── Derived (virtual) landmark registry ──────────────────────────────────
+// Virtual nodes computed from real landmarks in getMerged() on every frame.
+// They are auto-registered into LM / LM_IDX so every part of the code can
+// reference them by name — JOINT_DEFS, distance metrics, refFrom/refTo, etc.
+//
+// type 'midpoint' — position = average of all listed source landmarks.
+//
+// HOW TO ADD A NEW DERIVED NODE:
+//   1. Append an entry below (pick an idx >= 34 not yet in use).
+//   2. Reference it by name wherever a landmark name is accepted.
+//   That's it — no other code changes needed.
+const DERIVED_NODES = [
+  { idx: 33, name: 'C Hip',      type: 'midpoint', sources: ['L Hip',      'R Hip']      },
+  // { idx: 34, name: 'C Shoulder', type: 'midpoint', sources: ['L Shoulder', 'R Shoulder'] },
+  // { idx: 35, name: 'C Knee',     type: 'midpoint', sources: ['L Knee',     'R Knee']     },
+  // { idx: 36, name: 'C Ankle',    type: 'midpoint', sources: ['L Ankle',    'R Ankle']    },
+];
+
+// Auto-register all derived nodes into LM so names resolve everywhere
+for (const d of DERIVED_NODES) LM[d.idx] = d.name;
+
+// Reverse map: name → index (for human-readable references in POSE_LIBRARY)
 const LM_IDX = Object.fromEntries(Object.entries(LM).map(([k,v])=>[v,+k]));
 
 // Joint defs: [A, vertex_B, C] — angle at B
@@ -987,17 +1019,22 @@ function getMerged() {
       // If both manually placed: leave each at its own position (no sync)
     }
   }
-  // Compute virtual landmark 33 = C Hip: midpoint of L Hip (23) and R Hip (24)
-  const lh = base[23], rh = base[24];
-  if (lh && rh && (lh.visibility > 0.1 || rh.visibility > 0.1)) {
-    base[33] = {
-      x: (lh.x + rh.x) / 2,
-      y: (lh.y + rh.y) / 2,
-      z: (lh.z + rh.z) / 2,
-      visibility: Math.min(lh.visibility, rh.visibility),
-    };
-  } else {
-    base[33] = { x: 0, y: 0, z: 0, visibility: 0 };
+  // Compute all derived (virtual) landmarks from the DERIVED_NODES registry
+  for (const d of DERIVED_NODES) {
+    if (d.type === 'midpoint') {
+      const srcIdxs = d.sources.map(n => LM_IDX[n]).filter(i => i != null);
+      const valid   = srcIdxs.map(i => base[i]).filter(l => l && l.visibility > 0.1);
+      if (valid.length) {
+        base[d.idx] = {
+          x:          valid.reduce((s, l) => s + l.x, 0) / valid.length,
+          y:          valid.reduce((s, l) => s + l.y, 0) / valid.length,
+          z:          valid.reduce((s, l) => s + l.z, 0) / valid.length,
+          visibility: Math.min(...valid.map(l => l.visibility)),
+        };
+      } else {
+        base[d.idx] = { x: 0, y: 0, z: 0, visibility: 0 };
+      }
+    }
   }
   return base;
 }
@@ -1055,47 +1092,68 @@ function lmDistance(a, b) {
   return Math.hypot((a.x - b.x) * W, (a.y - b.y) * H);
 }
 
+// ─── Named distance utilities (usable directly from POSE_LIBRARY) ──────────
+//
+// absoluteDistance(fromName, toName, lm) → pixels | null
+//   Euclidean pixel distance between two named landmarks.
+//   Returns null if either landmark is invisible or the name is unknown.
+//   Works with derived nodes (e.g. 'C Hip') as well as real MediaPipe ones.
+//
+// normalizedDistance(fromName, toName, lm, opts) → ratio | null
+//   Distance expressed as a dimensionless ratio. opts controls normalisation:
+//     opts.refFrom + opts.refTo  → ratio = dist / refDist
+//                                   (landmark-relative; no calibration needed)
+//     opts.height (cm)           → ratio relative to that body height
+//     (nothing extra)            → falls back to global calibrationHeight
+//   Returns null when the required landmarks or calibration data are missing.
+
+function absoluteDistance(fromName, toName, lm) {
+  return lmDistance(lm[LM_IDX[fromName]], lm[LM_IDX[toName]]);
+}
+
+function normalizedDistance(fromName, toName, lm, opts = {}) {
+  const rawPx = absoluteDistance(fromName, toName, lm);
+  if (rawPx === null) return null;
+
+  if (opts.refFrom && opts.refTo) {
+    const refPx = absoluteDistance(opts.refFrom, opts.refTo, lm);
+    if (!refPx) return null;
+    return rawPx / refPx;
+  }
+
+  const h = opts.height ?? calibrationHeight;
+  if (h) {
+    const sh = lm[LM_IDX['L Shoulder']], an = lm[LM_IDX['L Ankle']];
+    if (!sh || !an) return null;
+    const W = canvas.width || 1, H = canvas.height || 1;
+    const bodyPx  = Math.hypot((sh.x - an.x) * W, (sh.y - an.y) * H);
+    const pxPerCm = bodyPx / (h * 0.85);
+    if (!pxPerCm) return null;
+    return (rawPx / pxPerCm) / h;
+  }
+  return null;
+}
+
 function resolveMetric(metric, joints, lm) {
   // ── Distance metric ──────────────────────────────────────────────────────
   if (metric.type === 'distance') {
     if (!lm) return null;
-    const fromIdx = LM_IDX[metric.from], toIdx = LM_IDX[metric.to];
-    if (fromIdx == null || toIdx == null) return null;
-    const rawPx = lmDistance(lm[fromIdx], lm[toIdx]);
-    if (rawPx === null) return null;
+    if (LM_IDX[metric.from] == null || LM_IDX[metric.to] == null) return null;
 
     let value, display, unit;
     if (metric.unit === 'ratio') {
-      // Ratio requires a second reference distance for normalization
-      if (metric.refFrom && metric.refTo) {
-        const refFromIdx = LM_IDX[metric.refFrom], refToIdx = LM_IDX[metric.refTo];
-        const refPx = lmDistance(lm[refFromIdx], lm[refToIdx]);
-        if (!refPx) return null;
-        value = Math.round((rawPx / refPx) * 100) / 100;
-        display = value.toFixed(2);
-        unit = 'ratio';
-      } else if (calibrationHeight) {
-        // Use body height ref: estimate pixel-per-cm from calibrationHeight
-        // We need a reference pixel length — use the full body height estimation:
-        // approximate from shoulder(11/12) to ankle(27/28) as ~85% of total height
-        const shoulderIdx = LM_IDX['L Shoulder'] ?? 11;
-        const ankleIdx    = LM_IDX['L Ankle']    ?? 27;
-        const sh = lm[shoulderIdx], an = lm[ankleIdx];
-        if (!sh || !an) return null;
-        const bodyPx = Math.hypot((sh.x - an.x) * (canvas.width||1), (sh.y - an.y) * (canvas.height||1));
-        const pxPerCm = bodyPx / (calibrationHeight * 0.85);
-        if (!pxPerCm) return null;
-        const cm = rawPx / pxPerCm;
-        value = Math.round((cm / calibrationHeight) * 100) / 100;
-        display = value.toFixed(2);
-        unit = 'ratio';
-      } else {
-        return null; // distance metric needs calibration — skip silently
-      }
+      const ratio = normalizedDistance(metric.from, metric.to, lm,
+        { refFrom: metric.refFrom, refTo: metric.refTo });
+      if (ratio === null) return null;   // needs calibration or landmarks invisible
+      value   = Math.round(ratio * 100) / 100;
+      display = value.toFixed(2);
+      unit    = 'ratio';
     } else {
-      value = Math.round(rawPx);
+      const px = absoluteDistance(metric.from, metric.to, lm);
+      if (px === null) return null;
+      value   = Math.round(px);
       display = value + 'px';
-      unit = 'px';
+      unit    = 'px';
     }
 
     const status = evalTarget(value, metric.target);
